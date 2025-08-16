@@ -496,9 +496,10 @@ class CachingAutotuner(KernelInterface):
         compile_meta["cc"] = self.device_props.cc
 
         if self.device_props.type == "cpu":
+            triton_helpers.set_driver_to_cpu()
             ######### modified ##########
-            # triton_helpers.set_driver_to_cpu()
             compile_meta["device"] = "cpu"
+            #############################
         else:
             triton_helpers.set_driver_to_gpu()
 

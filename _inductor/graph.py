@@ -2155,7 +2155,7 @@ class GraphLowering(torch.fx.Interpreter):
         import shutil
         src_path = mod.__file__
         dst_name = f"result-{config.cpu_backend}.py"
-        dst_path = os.path.join("/home/jseo.kang/pytorch2.0/", dst_name)
+        dst_path = os.path.join("/home/mcl/torch-triton-shared/results", dst_name)
         try:
             shutil.copy2(src_path, dst_path)
             print(f"Copied compiled module from {src_path!r} to {dst_path!r}")
