@@ -266,13 +266,6 @@ if [ -d "$SOURCE_DIR/_inductor" ]; then
         print_status $YELLOW "⚠ _inductor/runtime not found"
     fi
     
-    # Copy triton subdirectory (if it exists in _inductor)
-    if [ -d "$SOURCE_DIR/_inductor/triton" ]; then
-        copy_tree_rsync "$SOURCE_DIR/_inductor/triton" "$INDUCTOR_TARGET/triton" "Inductor triton files"
-    else
-        print_status $YELLOW "⚠ _inductor/triton not found"
-    fi
-    
     # Copy any root-level files in _inductor (excluding subdirectories)
     if find "$SOURCE_DIR/_inductor" -maxdepth 1 -type f -name "*.py" | grep -q .; then
         print_status $GREEN "\nCopying root-level inductor files..."
