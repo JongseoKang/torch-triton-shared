@@ -1,13 +1,14 @@
 #!/bin/bash
 
-# Script to copy custom Python files to virtual environment's PyTorch Inductor
+# Script to copy custom Python files to virtual environment's PyTorch Inductor and Triton
+# Working directory: torch-triton-shared (with _inductor & triton subdirectories)
 # Compatible with Ubuntu 24.04
 
 set -e  # Exit on any error
 
 # Configuration
-VENV_PATH="triton_shared/triton/.venv"
-SOURCE_DIR="."  # Current directory, change if needed
+VENV_PATH="$HOME/triton_shared/triton/.venv"
+SOURCE_DIR="."  # torch-triton-shared directory
 VERBOSE=false
 
 # Color codes for output
@@ -32,6 +33,11 @@ usage() {
     echo "  -s, --source     Source directory (default: current directory)"
     echo "  -e, --venv       Virtual environment path (default: triton_shared/triton/.venv)"
     echo "  -h, --help       Show this help message"
+    echo ""
+    echo "Expected directory structure:"
+    echo "  torch-triton-shared/"
+    echo "  ├── _inductor/          # Files to copy to torch/_inductor/"
+    echo "  └── triton/             # Files to copy to triton/python/triton/"
 }
 
 # Parse command line arguments
@@ -68,46 +74,6 @@ log_verbose() {
     fi
 }
 
-# Check if virtual environment exists
-if [ ! -d "$VENV_PATH" ]; then
-    print_status $RED "Error: Virtual environment not found at $VENV_PATH"
-    exit 1
-fi
-
-print_status $GREEN "Starting file copy process..."
-print_status $YELLOW "Virtual environment: $VENV_PATH"
-print_status $YELLOW "Source directory: $SOURCE_DIR"
-
-# Find PyTorch installation in the virtual environment
-PYTORCH_PATH=$(find "$VENV_PATH" -name "torch" -type d -path "*/site-packages/torch" | head -1)
-
-if [ -z "$PYTORCH_PATH" ]; then
-    print_status $RED "Error: PyTorch installation not found in virtual environment"
-    exit 1
-fi
-
-log_verbose "Found PyTorch at: $PYTORCH_PATH"
-
-# Define target directories
-INDUCTOR_TARGET="$PYTORCH_PATH/_inductor"
-TRITON_CPU_TARGET="$VENV_PATH/lib/python*/site-packages/triton/language/extra/cpu"
-
-# Expand the triton path wildcard
-TRITON_CPU_TARGET=$(echo $TRITON_CPU_TARGET)
-
-print_status $GREEN "Target directories:"
-print_status $YELLOW "  Inductor: $INDUCTOR_TARGET"
-print_status $YELLOW "  Triton CPU: $TRITON_CPU_TARGET"
-
-# Create target directories if they don't exist
-mkdir -p "$INDUCTOR_TARGET"
-if [ -n "$TRITON_CPU_TARGET" ] && [ -d "$(dirname "$TRITON_CPU_TARGET")" ]; then
-    mkdir -p "$TRITON_CPU_TARGET"
-fi
-
-# Counter for copied files
-COPIED_COUNT=0
-
 # Function to check if file should be ignored
 should_ignore_file() {
     local file=$1
@@ -122,6 +88,9 @@ should_ignore_file() {
         "license*"
         "changelog*"
         "*.log"
+        "__pycache__"
+        "*.pyc"
+        "*.pyo"
     )
     
     for pattern in "${ignore_patterns[@]}"; do
@@ -133,19 +102,80 @@ should_ignore_file() {
     return 1  # Should not ignore
 }
 
-# Function to copy file with backup
-copy_file() {
-    local source_file=$1
-    local target_file=$2
+# Alternative function using rsync (more reliable)
+copy_tree_rsync() {
+    local source_dir=$1
+    local target_dir=$2
     local description=$3
     
-    # Check if file should be ignored
-    if should_ignore_file "$source_file"; then
-        log_verbose "Ignoring file: $(basename "$source_file")"
+    if [ ! -d "$source_dir" ]; then
+        print_status $YELLOW "⚠ Source directory not found: $source_dir"
         return
     fi
     
-    if [ -f "$source_file" ]; then
+    print_status $GREEN "\nCopying $description..."
+    print_status $YELLOW "  From: $source_dir"
+    print_status $YELLOW "  To: $target_dir"
+    
+    # Create target directory
+    mkdir -p "$target_dir"
+    
+    # Use rsync to copy with exclusions
+    if command -v rsync >/dev/null 2>&1; then
+        rsync -av \
+            --exclude='.gitignore' \
+            --exclude='README*' \
+            --exclude='*.md' \
+            --exclude='*.txt' \
+            --exclude='LICENSE*' \
+            --exclude='CHANGELOG*' \
+            --exclude='*.log' \
+            --exclude='__pycache__' \
+            --exclude='*.pyc' \
+            --exclude='*.pyo' \
+            "$source_dir/" "$target_dir/"
+        print_status $GREEN "  ✓ Directory copied successfully"
+    else
+        # Fallback to the manual method if rsync not available
+        copy_tree "$source_dir" "$target_dir" "$description"
+    fi
+}
+
+# Function to copy directory tree with filtering
+copy_tree() {
+    local source_dir=$1
+    local target_dir=$2
+    local description=$3
+    local copied_count=0
+    
+    if [ ! -d "$source_dir" ]; then
+        print_status $YELLOW "⚠ Source directory not found: $source_dir"
+        return
+    fi
+    
+    print_status $GREEN "\nCopying $description..."
+    print_status $YELLOW "  From: $source_dir"
+    print_status $YELLOW "  To: $target_dir"
+    
+    # Create target directory structure
+    mkdir -p "$target_dir"
+    
+    # Use process substitution instead of pipe to avoid subshell
+    while IFS= read -r -d '' source_file; do
+        # Skip ignored files
+        if should_ignore_file "$source_file"; then
+            log_verbose "Ignoring: $(basename "$source_file")"
+            continue
+        fi
+        
+        # Calculate relative path from source directory
+        rel_path=${source_file#$source_dir/}
+        target_file="$target_dir/$rel_path"
+        
+        # Create target subdirectory if needed
+        target_subdir=$(dirname "$target_file")
+        mkdir -p "$target_subdir"
+        
         # Create backup if target exists
         if [ -f "$target_file" ]; then
             log_verbose "Creating backup: ${target_file}.backup"
@@ -154,85 +184,148 @@ copy_file() {
         
         # Copy the file
         cp "$source_file" "$target_file"
-        print_status $GREEN "✓ Copied $description"
-        log_verbose "  $source_file -> $target_file"
-        ((COPIED_COUNT++))
+        print_status $GREEN "  ✓ $(basename "$source_file") → $rel_path"
+        log_verbose "    $source_file -> $target_file"
+        ((copied_count++))
+    done < <(find "$source_dir" -type f -print0)
+    
+    if [ $copied_count -eq 0 ]; then
+        print_status $YELLOW "  No files copied from $source_dir"
     else
-        print_status $YELLOW "⚠ Source file not found: $source_file"
+        print_status $BLUE "  Copied $copied_count files"
     fi
 }
 
-print_status $BLUE "\nCopying files..."
-
-# 1. Copy _*inductor files (from runtime, codegen, or root)
-print_status $YELLOW "\n1. Processing _*inductor files..."
-
-# Find all directories matching _*inductor pattern
-find "$SOURCE_DIR" -type d -name "_*inductor" 2>/dev/null | while read inductor_dir; do
-    log_verbose "Processing directory: $inductor_dir"
-    
-    # Copy files from runtime subdirectory
-    if [ -d "$inductor_dir/runtime" ]; then
-        find "$inductor_dir/runtime" -name "*.py" -type f | while read file; do
-            filename=$(basename "$file")
-            copy_file "$file" "$INDUCTOR_TARGET/$filename" "inductor runtime file: $filename"
-        done
-    fi
-    
-    # Copy files from codegen subdirectory
-    if [ -d "$inductor_dir/codegen" ]; then
-        find "$inductor_dir/codegen" -name "*.py" -type f | while read file; do
-            filename=$(basename "$file")
-            copy_file "$file" "$INDUCTOR_TARGET/$filename" "inductor codegen file: $filename"
-        done
-    fi
-    
-    # Copy files directly from inductor directory (excluding subdirectories)
-    find "$inductor_dir" -maxdepth 1 -name "*.py" -type f | while read file; do
-        filename=$(basename "$file")
-        copy_file "$file" "$INDUCTOR_TARGET/$filename" "inductor file: $filename"
-    done
-done
-
-# 2. Copy libdevice.py for triton CPU
-print_status $YELLOW "\n2. Processing Triton CPU files..."
-
-# Find libdevice.py files
-find "$SOURCE_DIR" -name "libdevice.py" -type f 2>/dev/null | while read file; do
-    if [ -d "$TRITON_CPU_TARGET" ]; then
-        copy_file "$file" "$TRITON_CPU_TARGET/libdevice.py" "Triton CPU libdevice.py"
-    else
-        print_status $YELLOW "⚠ Triton CPU target directory not found, skipping libdevice.py"
-    fi
-done
-
-# 3. Copy __init__.py files for triton CPU
-find "$SOURCE_DIR" -name "__init__.py" -path "*/cpu/*" -type f 2>/dev/null | while read file; do
-    if [ -d "$TRITON_CPU_TARGET" ]; then
-        copy_file "$file" "$TRITON_CPU_TARGET/__init__.py" "Triton CPU __init__.py"
-    else
-        print_status $YELLOW "⚠ Triton CPU target directory not found, skipping __init__.py"
-    fi
-done
-
-# Also look for general __init__.py files if the specific path doesn't exist
-if [ ! -f "$TRITON_CPU_TARGET/__init__.py" ]; then
-    find "$SOURCE_DIR" -name "__init__.py" -type f 2>/dev/null | head -1 | while read file; do
-        if [ -d "$TRITON_CPU_TARGET" ]; then
-            copy_file "$file" "$TRITON_CPU_TARGET/__init__.py" "Triton CPU __init__.py (general)"
-        fi
-    done
+# Check if virtual environment exists
+if [ ! -d "$VENV_PATH" ]; then
+    print_status $RED "Error: Virtual environment not found at $VENV_PATH"
+    exit 1
 fi
 
-print_status $GREEN "\n✅ Copy process completed!"
-print_status $BLUE "Files processed. Check the output above for details."
+print_status $GREEN "Starting installation process..."
+print_status $YELLOW "Working directory: $SOURCE_DIR"
+print_status $YELLOW "Virtual environment: $VENV_PATH"
 
-# Note: The COPIED_COUNT variable won't be accurate due to subshells in while loops
-# This is a limitation of bash when using pipes with while loops
-
-print_status $YELLOW "\nNote: If you need to restore original files, backups were created with .backup extension"
-print_status $BLUE "\nTo verify the installation, you can check the target directories:"
-print_status $NC "  ls -la $INDUCTOR_TARGET"
-if [ -d "$TRITON_CPU_TARGET" ]; then
-    print_status $NC "  ls -la $TRITON_CPU_TARGET"
+# Verify source directories exist
+if [ ! -d "$SOURCE_DIR/_inductor" ] && [ ! -d "$SOURCE_DIR/triton" ]; then
+    print_status $RED "Error: Neither _inductor nor triton directories found in $SOURCE_DIR"
+    print_status $YELLOW "Expected structure:"
+    print_status $YELLOW "  $SOURCE_DIR/_inductor/"
+    print_status $YELLOW "  $SOURCE_DIR/triton/"
+    exit 1
 fi
+
+# Find PyTorch installation in the virtual environment
+PYTORCH_PATH=$(find "$VENV_PATH" -name "torch" -type d -path "*/site-packages/torch" | head -1)
+
+if [ -z "$PYTORCH_PATH" ]; then
+    print_status $RED "Error: PyTorch installation not found in virtual environment"
+    exit 1
+fi
+
+log_verbose "Found PyTorch at: $PYTORCH_PATH"
+
+# Find Triton installation in the virtual environment
+TRITON_PYTHON_PATH=$(find "$VENV_PATH" -name "triton" -type d -path "*/site-packages/triton" | head -1)
+
+if [ -z "$TRITON_PYTHON_PATH" ]; then
+    print_status $YELLOW "Warning: Triton installation not found in virtual environment"
+    print_status $YELLOW "Will try alternative path: $VENV_PATH/../python/triton/"
+    TRITON_PYTHON_PATH="$VENV_PATH/../python/triton"
+    mkdir -p "$TRITON_PYTHON_PATH"
+fi
+
+log_verbose "Triton Python path: $TRITON_PYTHON_PATH"
+
+# Define target directories
+INDUCTOR_TARGET="$PYTORCH_PATH/_inductor"
+TRITON_TARGET="$TRITON_PYTHON_PATH"
+
+print_status $BLUE "\nTarget locations:"
+print_status $YELLOW "  PyTorch Inductor: $INDUCTOR_TARGET"
+print_status $YELLOW "  Triton Python: $TRITON_TARGET"
+
+# Initialize counters
+TOTAL_COPIED=0
+
+# Part 1: Copy _inductor subdirectories to torch/_inductor
+if [ -d "$SOURCE_DIR/_inductor" ]; then
+    print_status $GREEN "\nProcessing PyTorch Inductor files..."
+    
+    # Copy codegen subdirectory
+    if [ -d "$SOURCE_DIR/_inductor/codegen" ]; then
+        copy_tree_rsync "$SOURCE_DIR/_inductor/codegen" "$INDUCTOR_TARGET/codegen" "Inductor codegen files"
+    else
+        print_status $YELLOW "⚠ _inductor/codegen not found"
+    fi
+    
+    # Copy runtime subdirectory
+    if [ -d "$SOURCE_DIR/_inductor/runtime" ]; then
+        copy_tree_rsync "$SOURCE_DIR/_inductor/runtime" "$INDUCTOR_TARGET/runtime" "Inductor runtime files"
+    else
+        print_status $YELLOW "⚠ _inductor/runtime not found"
+    fi
+    
+    # Copy triton subdirectory (if it exists in _inductor)
+    if [ -d "$SOURCE_DIR/_inductor/triton" ]; then
+        copy_tree_rsync "$SOURCE_DIR/_inductor/triton" "$INDUCTOR_TARGET/triton" "Inductor triton files"
+    else
+        print_status $YELLOW "⚠ _inductor/triton not found"
+    fi
+    
+    # Copy any root-level files in _inductor (excluding subdirectories)
+    if find "$SOURCE_DIR/_inductor" -maxdepth 1 -type f -name "*.py" | grep -q .; then
+        print_status $GREEN "\nCopying root-level inductor files..."
+        find "$SOURCE_DIR/_inductor" -maxdepth 1 -type f -name "*.py" | while read source_file; do
+            if ! should_ignore_file "$source_file"; then
+                filename=$(basename "$source_file")
+                target_file="$INDUCTOR_TARGET/$filename"
+                
+                # Create backup if target exists
+                if [ -f "$target_file" ]; then
+                    log_verbose "Creating backup: ${target_file}.backup"
+                    cp "$target_file" "${target_file}.backup"
+                fi
+                
+                cp "$source_file" "$target_file"
+                print_status $GREEN "  ✓ $filename → $filename"
+                log_verbose "    $source_file -> $target_file"
+            fi
+        done
+    fi
+else
+    print_status $YELLOW "⚠ _inductor directory not found, skipping PyTorch Inductor installation"
+fi
+
+# Part 2: Copy triton directory (sibling of _inductor) to triton/python/triton/
+if [ -d "$SOURCE_DIR/triton" ]; then
+    print_status $GREEN "\nProcessing Triton files (sibling directory)..."
+    copy_tree_rsync "$SOURCE_DIR/triton" "$TRITON_TARGET" "Triton Python files with subdirectories"
+else
+    print_status $YELLOW "⚠ triton directory (sibling of _inductor) not found, skipping Triton installation"
+fi
+
+print_status $GREEN "\n✅ Installation completed!"
+print_status $BLUE "\nInstallation summary:"
+print_status $YELLOW "  Source: $SOURCE_DIR"
+print_status $YELLOW "  Virtual env: $VENV_PATH"
+
+if [ -d "$SOURCE_DIR/_inductor" ]; then
+    print_status $GREEN "  ✓ PyTorch Inductor files installed"
+fi
+
+if [ -d "$SOURCE_DIR/triton" ]; then
+    print_status $GREEN "  ✓ Triton Python files installed"
+fi
+
+print_status $YELLOW "\nNote: Backups of overwritten files were created with .backup extension"
+
+print_status $BLUE "\nTo verify the installation:"
+if [ -d "$INDUCTOR_TARGET" ]; then
+    print_status $NC "  ls -la $INDUCTOR_TARGET"
+fi
+if [ -d "$TRITON_TARGET" ]; then
+    print_status $NC "  ls -la $TRITON_TARGET"
+fi
+
+print_status $GREEN "\nInstallation process finished successfully!"
