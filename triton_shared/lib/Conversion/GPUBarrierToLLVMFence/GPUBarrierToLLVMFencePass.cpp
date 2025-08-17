@@ -58,8 +58,8 @@ public:
             );
         }
 
-        LLVM_DEBUG(llvm::dbgs() << "Converted " << barrierOps.size() 
-        << " gpu.barrier operations to llvm.fence\n");
+        llvm::outs() << "Converted " << barrierOps.size() 
+        << " gpu.barrier operations to llvm.fence\n";
 
     }
 };

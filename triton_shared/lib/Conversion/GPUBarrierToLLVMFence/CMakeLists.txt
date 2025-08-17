@@ -11,9 +11,9 @@ add_triton_library(GPUBarrierToLLVMFence
   MLIRSupport
   MLIRTransforms
   
-  # Dialect libraries (based on your includes)
-  MLIRGPU                    # For gpu::BarrierOp
-  MLIRLLVMIR                 # For LLVM::FenceOp
+  # # Dialect libraries (based on your includes)
+  # MLIRGPU                    # For gpu::BarrierOp
+  # MLIRLLVMIR                 # For LLVM::FenceOp
   
   # Triton libraries (if needed)
   TritonIR
