@@ -14,18 +14,19 @@ source .venv/bin/activate
 
 2. install torch family
 ```
-pip install torch==2.7.1
-pip install pybind pillow numpy requests
-pip install torchvision==0.22.1 --no-deps
+pip3 install ninja cmake wheel pytest pybind11 setuptools pillow numpy requests
+pip3 install torch==2.7.1
+pip3 install torchvision==0.22.1 --no-deps
 ```
 
 3. install hf famliy
 ```
-pip install transformers huggingface_hub tokenizers datasets
+pip3 install transformers huggingface_hub tokenizers datasets
 ```
 
 4. install custom files
 ```
+cd ~
 git clone https://github.com/JongseoKang/torch-triton-shared
 cd torch-triton-shared
 ./install.sh
@@ -33,7 +34,7 @@ cd torch-triton-shared
 
 5. install triton-shared
 ```
-pip3 install ninja cmake wheel pytest pybind11 setuptools
+cd triton_shared/triton
 pip3 install -e . --no-build-isolation
 ```
 

@@ -2,7 +2,7 @@ add_triton_library(GPUBarrierToLLVMFence
   GPUBarrierToLLVMFencePass.cpp
   
   DEPENDS
-  GPUBarrierToLLVMFencePassIncGen
+  GPUBarrierToLLVMFenceConversionPassIncGen
   
   LINK_LIBS PUBLIC
   # Core MLIR libraries

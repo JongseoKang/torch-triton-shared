@@ -25,12 +25,12 @@ using namespace mlir;
 using namespace triton;
 
 #define GEN_PASS_CLASSES
-#include "triton-shared/Conversion/GPUBarrierToLLVMFence/Passese.h.inc"
+#include "triton-shared/Conversion/GPUBarrierToLLVMFence/Passes.h.inc"
 
 namespace mlir{
 namespace triton {
 #define GEN_PASS_DEF_GPUBARRIERTOLLVMFENCE
-#include "triton-shared/Conversion/GPUBarrierToLLVMFence/Passese.h.inc"
+#include "triton-shared/Conversion/GPUBarrierToLLVMFence/Passes.h.inc"
 }
 }
 
@@ -44,18 +44,18 @@ public:
         auto moduleOp = getOperation();
 
         SmallVector<gpu::BarrierOp> barrierOps;
-        moduleOp.walk([&](gpu::BarrierOp){
+        moduleOp.walk([&](gpu::BarrierOp op){
             barrierOps.push_back(op);
         });
 
         IRRewriter rewriter(&getContext());
         for(auto bop : barrierOps){
-            rewriter.setInsertionPoint(barrierOp);
+            rewriter.setInsertionPoint(bop);
             rewriter.replaceOpWithNewOp<LLVM::FenceOp>(
                 bop,
-                LLVM::AtomicOredering::seq_cst,     // sequential consistency
+                LLVM::AtomicOrdering::seq_cst,     // sequential consistency
                 StringRef("")                       // for all thread
-            )
+            );
         }
 
         LLVM_DEBUG(llvm::dbgs() << "Converted " << barrierOps.size() 
