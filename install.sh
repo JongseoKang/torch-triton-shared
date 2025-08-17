@@ -8,6 +8,8 @@ set -e  # Exit on any error
 
 # Configuration
 VENV_PATH="$HOME/triton_shared/triton/.venv"
+TRITON_SHARED_PATH="$HOME/triton_shared"
+TRITON_PYTHON_PATH="$HOME/triton_shared/triton/python/triton"
 SOURCE_DIR="."  # torch-triton-shared directory
 VERBOSE=false
 
@@ -24,48 +26,6 @@ print_status() {
     local message=$2
     echo -e "${color}${message}${NC}"
 }
-
-# Function to show usage
-usage() {
-    echo "Usage: $0 [OPTIONS]"
-    echo "Options:"
-    echo "  -v, --verbose    Enable verbose output"
-    echo "  -s, --source     Source directory (default: current directory)"
-    echo "  -e, --venv       Virtual environment path (default: triton_shared/triton/.venv)"
-    echo "  -h, --help       Show this help message"
-    echo ""
-    echo "Expected directory structure:"
-    echo "  torch-triton-shared/"
-    echo "  ├── _inductor/          # Files to copy to torch/_inductor/"
-    echo "  └── triton/             # Files to copy to triton/python/triton/"
-}
-
-# Parse command line arguments
-while [[ $# -gt 0 ]]; do
-    case $1 in
-        -v|--verbose)
-            VERBOSE=true
-            shift
-            ;;
-        -s|--source)
-            SOURCE_DIR="$2"
-            shift 2
-            ;;
-        -e|--venv)
-            VENV_PATH="$2"
-            shift 2
-            ;;
-        -h|--help)
-            usage
-            exit 0
-            ;;
-        *)
-            print_status $RED "Unknown option: $1"
-            usage
-            exit 1
-            ;;
-    esac
-done
 
 # Function for verbose logging
 log_verbose() {
@@ -84,7 +44,6 @@ should_ignore_file() {
         ".gitignore"
         "readme*"
         "*.md"
-        "*.txt"
         "license*"
         "changelog*"
         "*.log"
@@ -226,7 +185,6 @@ fi
 log_verbose "Found PyTorch at: $PYTORCH_PATH"
 
 # Find Triton installation in the virtual environment
-TRITON_PYTHON_PATH=$(find "$VENV_PATH" -name "triton" -type d -path "*/site-packages/triton" | head -1)
 
 if [ -z "$TRITON_PYTHON_PATH" ]; then
     print_status $YELLOW "Warning: Triton installation not found in virtual environment"
@@ -319,6 +277,56 @@ if [ -d "$INDUCTOR_TARGET" ]; then
 fi
 if [ -d "$TRITON_TARGET" ]; then
     print_status $NC "  ls -la $TRITON_TARGET"
+fi
+
+# Part 3: Copy triton_shared directory to $HOME/triton_shared (NEW)
+if [ "$has_triton_shared" = "true" ]; then
+    print_status $GREEN "\nProcessing TritonShared files..."
+    print_status $YELLOW "  Target: $TRITON_SHARED_PATH"
+    
+    # Copy the entire triton_shared directory maintaining hierarchy
+    copy_tree_rsync "$SOURCE_DIR/triton_shared" "$TRITON_SHARED_PATH" "TritonShared files with subdirectories"
+    
+    # Verify TritonShared installation
+    if [ -d "$TRITON_SHARED_PATH" ]; then
+        print_status $GREEN "  ✓ TritonShared files installed successfully"
+        log_verbose "TritonShared contents:"
+        if [ "$VERBOSE" = "true" ]; then
+            find "$TRITON_SHARED_PATH" -type f -name "*.py" | head -10 | while read file; do
+                rel_path=${file#$TRITON_SHARED_PATH/}
+                log_verbose "    $rel_path"
+            done
+        fi
+    fi
+fi
+
+print_status $GREEN "\n✅ Installation completed!"
+print_status $BLUE "\nInstallation summary:"
+print_status $YELLOW "  Source: $SOURCE_DIR"
+
+if [ "$has_inductor" = "true" ] && [ -n "$PYTORCH_PATH" ]; then
+    print_status $GREEN "  ✓ PyTorch Inductor files installed to: $INDUCTOR_TARGET"
+fi
+
+if [ "$has_triton" = "true" ]; then
+    print_status $GREEN "  ✓ Triton Python files installed to: $TRITON_PYTHON_PATH"
+fi
+
+if [ "$has_triton_shared" = "true" ]; then
+    print_status $GREEN "  ✓ TritonShared files installed to: $TRITON_SHARED_PATH"
+fi
+
+print_status $YELLOW "\nNote: Backups of overwritten files were created with .backup extension"
+
+print_status $BLUE "\nTo verify the installation:"
+if [ "$has_inductor" = "true" ] && [ -d "$INDUCTOR_TARGET" ]; then
+    print_status $NC "  ls -la $INDUCTOR_TARGET"
+fi
+if [ "$has_triton" = "true" ] && [ -d "$TRITON_PYTHON_PATH" ]; then
+    print_status $NC "  ls -la $TRITON_PYTHON_PATH"
+fi
+if [ "$has_triton_shared" = "true" ] && [ -d "$TRITON_SHARED_PATH" ]; then
+    print_status $NC "  ls -la $TRITON_SHARED_PATH"
 fi
 
 print_status $GREEN "\nInstallation process finished successfully!"
