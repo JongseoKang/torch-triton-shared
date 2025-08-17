@@ -3,10 +3,9 @@
 
 include "mlir/Pass/PassBase.td"
 
-def GPUBarrierToLLVMFence : Pass<"gpu_barrier-to-llvm_fence", "mlir::ModuleOp"> {
+def GPUBarrierToLLVMFence : Pass<"gpu-barrier-to-llvm-fence", "mlir::ModuleOp"> {
     let summary = "Convert gpu.barrier to llvm fence operation";
     let constructor = "triton::createGPUBarrierToLLVMFencePass()";
-    let options = [];
 }
 
 #endif

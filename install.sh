@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Script to copy custom Python files to virtual environment's PyTorch Inductor and Triton
-# Working directory: torch-triton-shared (with _inductor & triton subdirectories)
+# Script to copy custom Python files to virtual environment's PyTorch Inductor, Triton, and TritonShared
+# Working directory: torch-triton-shared (with _inductor, triton & triton_shared subdirectories)
 # Compatible with Ubuntu 24.04
 
 set -e  # Exit on any error
@@ -9,7 +9,7 @@ set -e  # Exit on any error
 # Configuration
 VENV_PATH="$HOME/triton_shared/triton/.venv"
 TRITON_SHARED_PATH="$HOME/triton_shared"
-TRITON_PYTHON_PATH="$HOME/triton_shared/triton/python/triton"
+TRITON_PYTHON_PATH="$HOME/triton_shared/triton/python/triton/"
 SOURCE_DIR="."  # torch-triton-shared directory
 VERBOSE=false
 
@@ -26,6 +26,54 @@ print_status() {
     local message=$2
     echo -e "${color}${message}${NC}"
 }
+
+# Function to show usage
+usage() {
+    echo "Usage: $0 [OPTIONS]"
+    echo "Options:"
+    echo "  -v, --verbose         Enable verbose output"
+    echo "  -s, --source          Source directory (default: current directory)"
+    echo "  -e, --venv            Virtual environment path (default: \$HOME/triton_shared/triton/.venv)"
+    echo "  -t, --triton-shared   TritonShared target path (default: \$HOME/triton_shared)"
+    echo "  -h, --help            Show this help message"
+    echo ""
+    echo "Expected directory structure:"
+    echo "  torch-triton-shared/"
+    echo "  ├── _inductor/          # Files to copy to torch/_inductor/"
+    echo "  ├── triton/             # Files to copy to triton/python/triton/"
+    echo "  └── triton_shared/      # Files to copy to \$HOME/triton_shared/"
+}
+
+# Parse command line arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -v|--verbose)
+            VERBOSE=true
+            shift
+            ;;
+        -s|--source)
+            SOURCE_DIR="$2"
+            shift 2
+            ;;
+        -e|--venv)
+            VENV_PATH="$2"
+            shift 2
+            ;;
+        -t|--triton-shared)
+            TRITON_SHARED_PATH="$2"
+            shift 2
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            print_status $RED "Unknown option: $1"
+            usage
+            exit 1
+            ;;
+    esac
+done
 
 # Function for verbose logging
 log_verbose() {
@@ -44,12 +92,17 @@ should_ignore_file() {
         ".gitignore"
         "readme*"
         "*.md"
+        "*.txt"
         "license*"
         "changelog*"
         "*.log"
         "__pycache__"
         "*.pyc"
         "*.pyo"
+        ".git"
+        ".gitmodules"
+        "*.backup"
+        # NOTE: CMakeLists.txt is NOT ignored - we want to copy it
     )
     
     for pattern in "${ignore_patterns[@]}"; do
@@ -61,7 +114,7 @@ should_ignore_file() {
     return 1  # Should not ignore
 }
 
-# Alternative function using rsync (more reliable)
+# Alternative function using rsync (more reliable) - ADDITIVE COPY ONLY
 copy_tree_rsync() {
     local source_dir=$1
     local target_dir=$2
@@ -76,24 +129,34 @@ copy_tree_rsync() {
     print_status $YELLOW "  From: $source_dir"
     print_status $YELLOW "  To: $target_dir"
     
-    # Create target directory
+    # Create target directory (DO NOT REMOVE EXISTING)
     mkdir -p "$target_dir"
     
-    # Use rsync to copy with exclusions
+    # Use rsync to copy with exclusions - ADDITIVE COPY ONLY (NO --delete)
     if command -v rsync >/dev/null 2>&1; then
         rsync -av \
             --exclude='.gitignore' \
             --exclude='README*' \
             --exclude='*.md' \
-            --exclude='*.txt' \
+            --exclude='license*' \
             --exclude='LICENSE*' \
             --exclude='CHANGELOG*' \
             --exclude='*.log' \
             --exclude='__pycache__' \
             --exclude='*.pyc' \
             --exclude='*.pyo' \
+            --exclude='.git*' \
+            --exclude='*.backup' \
+            --include='CMakeLists.txt' \
+            --include='*.cmake' \
+            --include='*.cpp' \
+            --include='*.h' \
+            --include='*.hpp' \
+            --include='*.py' \
+            --include='*.td' \
+            --include='*.inc' \
             "$source_dir/" "$target_dir/"
-        print_status $GREEN "  ✓ Directory copied successfully"
+        print_status $GREEN "  ✓ Directory copied additively (preserving existing files)"
     else
         # Fallback to the manual method if rsync not available
         copy_tree "$source_dir" "$target_dir" "$description"
@@ -121,10 +184,14 @@ copy_tree() {
     
     # Use process substitution instead of pipe to avoid subshell
     while IFS= read -r -d '' source_file; do
-        # Skip ignored files
+        # Skip ignored files (but allow CMakeLists.txt and build files)
         if should_ignore_file "$source_file"; then
-            log_verbose "Ignoring: $(basename "$source_file")"
-            continue
+            # Special exception for important build files
+            local basename=$(basename "$source_file")
+            if [[ "${basename,,}" != "cmakelists.txt" ]] && [[ "${basename}" != *.cmake ]] && [[ "${basename}" != *.cpp ]] && [[ "${basename}" != *.h ]] && [[ "${basename}" != *.hpp ]] && [[ "${basename}" != *.py ]] && [[ "${basename}" != *.td ]] && [[ "${basename}" != *.inc ]]; then
+                log_verbose "Ignoring: $(basename "$source_file")"
+                continue
+            fi
         fi
         
         # Calculate relative path from source directory
@@ -135,13 +202,7 @@ copy_tree() {
         target_subdir=$(dirname "$target_file")
         mkdir -p "$target_subdir"
         
-        # Create backup if target exists
-        if [ -f "$target_file" ]; then
-            log_verbose "Creating backup: ${target_file}.backup"
-            cp "$target_file" "${target_file}.backup"
-        fi
-        
-        # Copy the file
+        # Copy the file (no backup)
         cp "$source_file" "$target_file"
         print_status $GREEN "  ✓ $(basename "$source_file") → $rel_path"
         log_verbose "    $source_file -> $target_file"
@@ -155,137 +216,95 @@ copy_tree() {
     fi
 }
 
-# Check if virtual environment exists
-if [ ! -d "$VENV_PATH" ]; then
-    print_status $RED "Error: Virtual environment not found at $VENV_PATH"
-    exit 1
-fi
+# Validation function
+validate_paths() {
+    print_status $BLUE "Validating paths..."
+    
+    # Check if source directory exists
+    if [ ! -d "$SOURCE_DIR" ]; then
+        print_status $RED "Error: Source directory not found: $SOURCE_DIR"
+        exit 1
+    fi
+    
+    # Check if virtual environment exists (only if we're copying to it)
+    if [ -d "$SOURCE_DIR/_inductor" ] || [ -d "$SOURCE_DIR/triton" ]; then
+        if [ ! -d "$VENV_PATH" ]; then
+            print_status $RED "Error: Virtual environment not found at $VENV_PATH"
+            print_status $YELLOW "Hint: Make sure your virtual environment is set up correctly"
+            exit 1
+        fi
+    fi
+    
+    # Create triton_shared target directory if it doesn't exist
+    if [ -d "$SOURCE_DIR/triton_shared" ]; then
+        mkdir -p "$TRITON_SHARED_PATH"
+        log_verbose "TritonShared target directory: $TRITON_SHARED_PATH"
+    fi
+}
 
 print_status $GREEN "Starting installation process..."
 print_status $YELLOW "Working directory: $SOURCE_DIR"
 print_status $YELLOW "Virtual environment: $VENV_PATH"
+print_status $YELLOW "TritonShared target: $TRITON_SHARED_PATH"
+
+# Validate paths
+validate_paths
 
 # Verify source directories exist
-if [ ! -d "$SOURCE_DIR/_inductor" ] && [ ! -d "$SOURCE_DIR/triton" ]; then
-    print_status $RED "Error: Neither _inductor nor triton directories found in $SOURCE_DIR"
+has_inductor=$([ -d "$SOURCE_DIR/_inductor" ] && echo "true" || echo "false")
+has_triton=$([ -d "$SOURCE_DIR/triton" ] && echo "true" || echo "false")
+has_triton_shared=$([ -d "$SOURCE_DIR/triton_shared" ] && echo "true" || echo "false")
+
+if [ "$has_inductor" = "false" ] && [ "$has_triton" = "false" ] && [ "$has_triton_shared" = "false" ]; then
+    print_status $RED "Error: No valid source directories found in $SOURCE_DIR"
     print_status $YELLOW "Expected structure:"
     print_status $YELLOW "  $SOURCE_DIR/_inductor/"
     print_status $YELLOW "  $SOURCE_DIR/triton/"
+    print_status $YELLOW "  $SOURCE_DIR/triton_shared/"
     exit 1
 fi
 
-# Find PyTorch installation in the virtual environment
-PYTORCH_PATH=$(find "$VENV_PATH" -name "torch" -type d -path "*/site-packages/torch" | head -1)
-
-if [ -z "$PYTORCH_PATH" ]; then
-    print_status $RED "Error: PyTorch installation not found in virtual environment"
-    exit 1
-fi
-
-log_verbose "Found PyTorch at: $PYTORCH_PATH"
-
-# Find Triton installation in the virtual environment
-
-if [ -z "$TRITON_PYTHON_PATH" ]; then
-    print_status $YELLOW "Warning: Triton installation not found in virtual environment"
-    print_status $YELLOW "Will try alternative path: $VENV_PATH/../python/triton/"
-    TRITON_PYTHON_PATH="$VENV_PATH/../python/triton"
-    mkdir -p "$TRITON_PYTHON_PATH"
-fi
-
-log_verbose "Triton Python path: $TRITON_PYTHON_PATH"
-
-# Define target directories
-INDUCTOR_TARGET="$PYTORCH_PATH/_inductor"
-TRITON_TARGET="$TRITON_PYTHON_PATH"
-
-print_status $BLUE "\nTarget locations:"
-print_status $YELLOW "  PyTorch Inductor: $INDUCTOR_TARGET"
-print_status $YELLOW "  Triton Python: $TRITON_TARGET"
-
-# Initialize counters
-TOTAL_COPIED=0
+print_status $BLUE "\nFound source directories:"
+[ "$has_inductor" = "true" ] && print_status $GREEN "  ✓ _inductor/"
+[ "$has_triton" = "true" ] && print_status $GREEN "  ✓ triton/"
+[ "$has_triton_shared" = "true" ] && print_status $GREEN "  ✓ triton_shared/"
 
 # Part 1: Copy _inductor subdirectories to torch/_inductor
-if [ -d "$SOURCE_DIR/_inductor" ]; then
-    print_status $GREEN "\nProcessing PyTorch Inductor files..."
-    
-    # Copy codegen subdirectory
-    if [ -d "$SOURCE_DIR/_inductor/codegen" ]; then
-        copy_tree_rsync "$SOURCE_DIR/_inductor/codegen" "$INDUCTOR_TARGET/codegen" "Inductor codegen files"
+if [ "$has_inductor" = "true" ]; then
+    # Use fixed PyTorch path in virtual environment
+    PYTORCH_PATH=$(find "$VENV_PATH" -name "torch" -type d -path "*/site-packages/torch" | head -1)
+
+    if [ -z "$PYTORCH_PATH" ]; then
+        print_status $RED "Error: PyTorch installation not found in virtual environment at $VENV_PATH"
+        print_status $YELLOW "Skipping PyTorch Inductor installation"
     else
-        print_status $YELLOW "⚠ _inductor/codegen not found"
+        log_verbose "Found PyTorch at: $PYTORCH_PATH"
+        INDUCTOR_TARGET="$PYTORCH_PATH/_inductor"
+        
+        print_status $GREEN "\nProcessing PyTorch Inductor files..."
+        print_status $YELLOW "  Target: $INDUCTOR_TARGET"
+        
+        # Copy the entire _inductor directory completely
+        copy_tree_rsync "$SOURCE_DIR/_inductor" "$INDUCTOR_TARGET" "All Inductor files and subdirectories"
     fi
+fi
+
+# Part 2: Copy triton directory to fixed triton path
+if [ "$has_triton" = "true" ]; then
+    print_status $GREEN "\nProcessing Triton files..."
+    print_status $YELLOW "  Target: $TRITON_PYTHON_PATH"
     
-    # Copy runtime subdirectory
-    if [ -d "$SOURCE_DIR/_inductor/runtime" ]; then
-        copy_tree_rsync "$SOURCE_DIR/_inductor/runtime" "$INDUCTOR_TARGET/runtime" "Inductor runtime files"
-    else
-        print_status $YELLOW "⚠ _inductor/runtime not found"
-    fi
-    
-    # Copy any root-level files in _inductor (excluding subdirectories)
-    if find "$SOURCE_DIR/_inductor" -maxdepth 1 -type f -name "*.py" | grep -q .; then
-        print_status $GREEN "\nCopying root-level inductor files..."
-        find "$SOURCE_DIR/_inductor" -maxdepth 1 -type f -name "*.py" | while read source_file; do
-            if ! should_ignore_file "$source_file"; then
-                filename=$(basename "$source_file")
-                target_file="$INDUCTOR_TARGET/$filename"
-                
-                # Create backup if target exists
-                if [ -f "$target_file" ]; then
-                    log_verbose "Creating backup: ${target_file}.backup"
-                    cp "$target_file" "${target_file}.backup"
-                fi
-                
-                cp "$source_file" "$target_file"
-                print_status $GREEN "  ✓ $filename → $filename"
-                log_verbose "    $source_file -> $target_file"
-            fi
-        done
-    fi
-else
-    print_status $YELLOW "⚠ _inductor directory not found, skipping PyTorch Inductor installation"
+    # Copy the entire triton directory completely
+    copy_tree_rsync "$SOURCE_DIR/triton" "$TRITON_PYTHON_PATH" "All Triton Python files with subdirectories"
 fi
 
-# Part 2: Copy triton directory (sibling of _inductor) to triton/python/triton/
-if [ -d "$SOURCE_DIR/triton" ]; then
-    print_status $GREEN "\nProcessing Triton files (sibling directory)..."
-    copy_tree_rsync "$SOURCE_DIR/triton" "$TRITON_TARGET" "Triton Python files with subdirectories"
-else
-    print_status $YELLOW "⚠ triton directory (sibling of _inductor) not found, skipping Triton installation"
-fi
-
-print_status $GREEN "\n✅ Installation completed!"
-print_status $BLUE "\nInstallation summary:"
-print_status $YELLOW "  Source: $SOURCE_DIR"
-print_status $YELLOW "  Virtual env: $VENV_PATH"
-
-if [ -d "$SOURCE_DIR/_inductor" ]; then
-    print_status $GREEN "  ✓ PyTorch Inductor files installed"
-fi
-
-if [ -d "$SOURCE_DIR/triton" ]; then
-    print_status $GREEN "  ✓ Triton Python files installed"
-fi
-
-print_status $YELLOW "\nNote: Backups of overwritten files were created with .backup extension"
-
-print_status $BLUE "\nTo verify the installation:"
-if [ -d "$INDUCTOR_TARGET" ]; then
-    print_status $NC "  ls -la $INDUCTOR_TARGET"
-fi
-if [ -d "$TRITON_TARGET" ]; then
-    print_status $NC "  ls -la $TRITON_TARGET"
-fi
-
-# Part 3: Copy triton_shared directory to $HOME/triton_shared (NEW)
+# Part 3: Copy triton_shared directory to fixed triton_shared path
 if [ "$has_triton_shared" = "true" ]; then
     print_status $GREEN "\nProcessing TritonShared files..."
     print_status $YELLOW "  Target: $TRITON_SHARED_PATH"
     
-    # Copy the entire triton_shared directory maintaining hierarchy
-    copy_tree_rsync "$SOURCE_DIR/triton_shared" "$TRITON_SHARED_PATH" "TritonShared files with subdirectories"
+    # Copy the entire triton_shared directory completely
+    copy_tree_rsync "$SOURCE_DIR/triton_shared" "$TRITON_SHARED_PATH" "All TritonShared files with subdirectories"
     
     # Verify TritonShared installation
     if [ -d "$TRITON_SHARED_PATH" ]; then
@@ -305,27 +324,27 @@ print_status $BLUE "\nInstallation summary:"
 print_status $YELLOW "  Source: $SOURCE_DIR"
 
 if [ "$has_inductor" = "true" ] && [ -n "$PYTORCH_PATH" ]; then
-    print_status $GREEN "  ✓ PyTorch Inductor files installed to: $INDUCTOR_TARGET"
+    print_status $GREEN "  ✓ PyTorch Inductor files completely copied to: $PYTORCH_PATH/_inductor"
 fi
 
 if [ "$has_triton" = "true" ]; then
-    print_status $GREEN "  ✓ Triton Python files installed to: $TRITON_PYTHON_PATH"
+    print_status $GREEN "  ✓ Triton Python files completely copied to: $TRITON_PYTHON_PATH"
 fi
 
 if [ "$has_triton_shared" = "true" ]; then
-    print_status $GREEN "  ✓ TritonShared files installed to: $TRITON_SHARED_PATH"
+    print_status $GREEN "  ✓ TritonShared files completely copied to: $TRITON_SHARED_PATH"
 fi
 
-print_status $YELLOW "\nNote: Backups of overwritten files were created with .backup extension"
+print_status $YELLOW "\nNote: Additive copy performed - existing files overwritten without backup"
 
 print_status $BLUE "\nTo verify the installation:"
-if [ "$has_inductor" = "true" ] && [ -d "$INDUCTOR_TARGET" ]; then
-    print_status $NC "  ls -la $INDUCTOR_TARGET"
+if [ "$has_inductor" = "true" ] && [ -n "$PYTORCH_PATH" ]; then
+    print_status $NC "  ls -la $PYTORCH_PATH/_inductor"
 fi
-if [ "$has_triton" = "true" ] && [ -d "$TRITON_PYTHON_PATH" ]; then
+if [ "$has_triton" = "true" ]; then
     print_status $NC "  ls -la $TRITON_PYTHON_PATH"
 fi
-if [ "$has_triton_shared" = "true" ] && [ -d "$TRITON_SHARED_PATH" ]; then
+if [ "$has_triton_shared" = "true" ]; then
     print_status $NC "  ls -la $TRITON_SHARED_PATH"
 fi
 
